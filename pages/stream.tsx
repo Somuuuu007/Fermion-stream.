@@ -12,6 +12,7 @@ const socket = io('http://localhost:4000');
 export default function StreamPage() {
   const router = useRouter();
   const [remoteStreams, setRemoteStreams] = useState<{ id: string; stream: MediaStream }[]>([]);
+  const [consumedProducers, setConsumedProducers] = useState<Set<string>>(new Set());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [device, setDevice] = useState<Device | null>(null);
   const [sendTransport, setSendTransport] = useState<mediasoupTypes.Transport | null>(null);
@@ -97,6 +98,15 @@ export default function StreamPage() {
         socket.on('peer-disconnected', ({ socketId }) => {
           setRemoteStreams(prev => prev.filter(s => s.id !== socketId));
           videoRefs.current.delete(socketId);
+          setConsumedProducers(prev => {
+            const newSet = new Set(prev);
+            Array.from(prev).forEach(key => {
+              if (key.startsWith(socketId + '-')) {
+                newSet.delete(key);
+              }
+            });
+            return newSet;
+          });
         });
 
       } catch (error) {
@@ -106,6 +116,13 @@ export default function StreamPage() {
   }, []);
 
   const consumeProducer = async (transport: mediasoupTypes.Transport, producerId: string, socketId: string, rtpCapabilities: any) => {
+    const consumerKey = `${socketId}-${producerId}`;
+    
+    if (consumedProducers.has(consumerKey)) {
+      console.log(`Already consuming producer ${producerId} for ${socketId}`);
+      return;
+    }
+
     socket.emit('consume', {
       transportId: transport.id,
       producerId,
@@ -122,6 +139,8 @@ export default function StreamPage() {
         kind: consumerData.kind,
         rtpParameters: consumerData.rtpParameters,
       });
+
+      setConsumedProducers(prev => new Set([...prev, consumerKey]));
 
       setRemoteStreams(prev => {
         const existingIndex = prev.findIndex(s => s.id === socketId);
@@ -268,7 +287,7 @@ export default function StreamPage() {
   useEffect(() => {
     if (!canvasRef.current) return;
   
-    const stream = canvasRef.current.captureStream(60);
+    const stream = canvasRef.current.captureStream(30);
     const ws = new WebSocket('ws://localhost:5000');
     let recorder: MediaRecorder | null = null;
   
@@ -277,7 +296,7 @@ export default function StreamPage() {
   
       recorder = new MediaRecorder(stream, {
         mimeType: 'video/webm; codecs=vp8',
-        videoBitsPerSecond: 2500000
+        videoBitsPerSecond: 1500000
       });
   
       recorder.ondataavailable = (event) => {
@@ -286,7 +305,7 @@ export default function StreamPage() {
         }
       };
   
-      recorder.start(500);
+      recorder.start(100);
     };
   
     return () => {
@@ -296,6 +315,21 @@ export default function StreamPage() {
       ws.close();
     };
   }, [canvasRef]);
+  
+useEffect(() => {
+  const interval = setInterval(() => {
+    const dummy = document.createElement('div');
+    dummy.innerText = 'keep-alive';
+    dummy.style.display = 'none'; // invisible
+    document.body.appendChild(dummy);
+    setTimeout(() => {
+      document.body.removeChild(dummy);
+    }, 50);
+  }, 1000);
+
+  return () => clearInterval(interval);
+}, []);
+
   
 
   return (
